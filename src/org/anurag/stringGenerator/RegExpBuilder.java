@@ -15,11 +15,11 @@ import org.anurag.stringGenerator.token.Token;
 
 public class RegExpBuilder {
 
-	private Map<Integer, Entity> map;
+	private Map<Integer, Entity> groupIdToEntityMap;
 	private int currentGroup = 0;
 
 	public RegExpBuilder() {
-		map = new HashMap<>();
+		groupIdToEntityMap = new HashMap<>();
 	}
 
 	public StringGenerator build(String s) throws Exception {
@@ -28,17 +28,23 @@ public class RegExpBuilder {
 
 	private StringGenerator build(String s, int start, int end) throws Exception {
 
-		// STEP 1: Reduce
+		// STEP 1: PARSER: Generate a Stack of Tokens
 		Stack<Token> tokens = new Stack<>();
 		int currentCharacterPos = start;
+
+		// Parsing character by character
 		while (currentCharacterPos < end) {
 			Token token = null;
 			char c = s.charAt(currentCharacterPos);
 			switch (c) {
 			case Literal.BRANCH_OPERATOR_LITERAL: {
+				// Cannot start with a branch operator
+				// Cannot have two consecutive branch operators
 				if (tokens.isEmpty() || (!tokens.isEmpty() && tokens.peek() instanceof BranchOperator))
 					throw new Error("Incorrect branch operators");
 
+				// operator precedence for concat is above branch
+				// concat all Tokens before this (till last branch operator)
 				concatTillLastBranch(tokens);
 
 				currentCharacterPos++;
@@ -47,6 +53,7 @@ public class RegExpBuilder {
 				break;
 			}
 			case Literal.ESCAPE_OPERATOR_LITERAL: {
+				// An escape literal needs to be followed by something
 				if (currentCharacterPos == (end - 1))
 					throw new Exception("Invalid escape at character position " + currentCharacterPos);
 
@@ -54,10 +61,13 @@ public class RegExpBuilder {
 				char nextCharacter = s.charAt(currentCharacterPos + 1);
 
 				StringGenerator e;
-				if (Literal.isDigit(nextCharacter) && map.keySet().contains(Literal.getLiteralAsNumber(nextCharacter))) {
+
+				// Check if it is a backreference AND it is a valid backreference
+				if (Literal.isDigit(nextCharacter) && groupIdToEntityMap.keySet().contains(Literal.getLiteralAsNumber(nextCharacter))) {
 					String backRefString = "" + c + nextCharacter;
 					e = buildBackRefEntity(backRefString, Literal.getLiteralAsNumber(nextCharacter));
 				} else {
+					// It's not a backreference, so treat it like a normal escape character
 					e = buildCharacterEntity(nextCharacter);
 				}
 
@@ -66,6 +76,7 @@ public class RegExpBuilder {
 				break;
 			}
 			case Literal.BRACKET_START_OPERATOR_LITERAL: {
+				// Find the FIRST ending bracket
 				int secondPointer = currentCharacterPos + 1;
 				StringBuilder insideSquareBracket = new StringBuilder();
 				while (secondPointer < end && s.charAt(secondPointer) != Literal.BRACKET_END_OPERATOR_LITERAL) {
@@ -82,6 +93,7 @@ public class RegExpBuilder {
 				break;
 			}
 			case Literal.GROUP_START_LITERAL: {
+				// Find the MATCHING ending group
 				int secondPointer = currentCharacterPos + 1;
 				int open = 1;
 				while (secondPointer < end) {
@@ -102,10 +114,12 @@ public class RegExpBuilder {
 				this.currentGroup++;
 				int groupId = this.currentGroup;
 
+				// Build this group recursively
 				StringGenerator e = this.build(s, currentCharacterPos + 1, secondPointer);
 				// TODO: regExp.setEnclosingParans();
 
-				map.put(groupId, (Entity) e);
+				// When group is built, store the id for future use for backreference
+				groupIdToEntityMap.put(groupId, (Entity) e);
 
 				token = (Token) e;
 				currentCharacterPos = secondPointer + 1;
@@ -124,6 +138,7 @@ public class RegExpBuilder {
 				break;
 			}
 			}
+			// Check if a repeater is next
 			if (!(token instanceof BranchOperator) && currentCharacterPos < end && RepeaterBuilder.looksLikeRepeater(s, currentCharacterPos)) {
 				Repeater r = RepeaterBuilder.build(s, currentCharacterPos, end);
 				Entity e = (Entity) token;
@@ -134,8 +149,15 @@ public class RegExpBuilder {
 			tokens.push(token);
 		}
 
+		// At this stage the tokens stack should look like:
+		// E1 | E2 | E3 | E4 E5 E6
+
+		// STEP 2: Concat what is remaining to make it
+		// E1 | E2 | E3 | E7
 		concatTillLastBranch(tokens);
 
+		// STEP 3: This is branch operator
+		// Will send E8 <--- an OrEntity with E1, E2, E3, E7
 		return mergeBranches(tokens);
 
 	}
@@ -186,7 +208,7 @@ public class RegExpBuilder {
 	}
 
 	private StringGenerator buildBackRefEntity(String s, int id) {
-		Entity backReferecedEntity = map.get(id);
+		Entity backReferecedEntity = groupIdToEntityMap.get(id);
 		BackRefEntity bRefE = new BackRefEntity(s, backReferecedEntity);
 		return bRefE;
 
